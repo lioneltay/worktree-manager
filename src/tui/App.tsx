@@ -4,6 +4,7 @@ import { spawn, execSync } from "node:child_process";
 import { WorktreeList } from "./views/WorktreeList.js";
 import { CreateFlow } from "./views/CreateFlow.js";
 import { DeleteConfirm } from "./views/DeleteConfirm.js";
+import { OpenConfirm } from "./views/OpenConfirm.js";
 import { PruneConfirm } from "./views/PruneConfirm.js";
 import { list, getMainWorktree, status, remove } from "../core/worktree.js";
 import { loadConfig } from "../core/config.js";
@@ -13,6 +14,7 @@ import type { WorktreeStatus, WtConfig } from "../types.js";
 type View =
   | { type: "list" }
   | { type: "create" }
+  | { type: "confirm-open"; worktree: { name: string; path: string; branch: string } }
   | { type: "delete"; worktree: WorktreeStatus }
   | { type: "prune" };
 
@@ -32,6 +34,32 @@ export function App() {
 
   const gitRoot = useMemo(() => findGitRoot(), []);
   const statusRequestRef = useRef(0);
+
+  const openWorktree = (wt: { path: string; branch: string }): boolean => {
+    if (!config.open) return false;
+    const hasTemplate =
+      config.open.includes("{{path}}") ||
+      config.open.includes("{{branch}}");
+    if (hasTemplate) {
+      const cmd = config.open
+        .replaceAll("{{path}}", wt.path)
+        .replaceAll("{{branch}}", wt.branch);
+      try {
+        execSync(cmd, { stdio: "ignore", shell: "/bin/bash" });
+      } catch {
+        setStatusMessage(`Failed to run: ${cmd}`);
+        return false;
+      }
+    } else {
+      const child = spawn(config.open, [wt.path], {
+        detached: true,
+        stdio: "ignore",
+      });
+      child.on("error", () => {});
+      child.unref();
+    }
+    return true;
+  };
 
   const refreshWorktrees = async () => {
     try {
@@ -88,28 +116,7 @@ export function App() {
           expandedStatus={expandedStatus}
           statusMessage={statusMessage}
           onOpen={(wt) => {
-            if (config.open) {
-              const hasTemplate =
-                config.open.includes("{{path}}") ||
-                config.open.includes("{{branch}}");
-              if (hasTemplate) {
-                const cmd = config.open
-                  .replaceAll("{{path}}", wt.path)
-                  .replaceAll("{{branch}}", wt.branch);
-                try {
-                  execSync(cmd, { stdio: "ignore", shell: "/bin/bash" });
-                } catch {
-                  setStatusMessage(`Failed to run: ${cmd}`);
-                }
-              } else {
-                const child = spawn(config.open, [wt.path], {
-                  detached: true,
-                  stdio: "ignore",
-                });
-                child.on("error", () => {});
-                child.unref();
-              }
-            } else {
+            if (!openWorktree(wt)) {
               setStatusMessage(`Path: ${wt.path}`);
             }
           }}
@@ -123,9 +130,24 @@ export function App() {
     case "create":
       return (
         <CreateFlow
-          onDone={() => {
+          onDone={(worktree) => {
             refreshWorktrees();
-            setView({ type: "list" });
+            if (config.open) {
+              setView({ type: "confirm-open", worktree });
+            } else {
+              setView({ type: "list" });
+            }
+          }}
+          onCancel={() => setView({ type: "list" })}
+        />
+      );
+    case "confirm-open":
+      return (
+        <OpenConfirm
+          worktreeName={view.worktree.name}
+          onConfirm={() => {
+            openWorktree({ path: view.worktree.path, branch: view.worktree.branch });
+            exit();
           }}
           onCancel={() => setView({ type: "list" })}
         />

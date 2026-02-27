@@ -6,8 +6,10 @@ import { create } from "../../core/worktree.js";
 import { createGit } from "../../core/git.js";
 import { findGitRoot } from "../../utils/paths.js";
 
+type CreatedWorktree = { name: string; path: string; branch: string };
+
 type Props = {
-  onDone: () => void;
+  onDone: (worktree: CreatedWorktree) => void;
   onCancel: () => void;
 };
 
@@ -59,11 +61,11 @@ export function CreateFlow({ onDone, onCancel }: Props) {
     setCreating(true);
     setError(null);
     try {
-      await create(branch, {
+      const result = await create(branch, {
         newBranch: opts.newBranch,
         from: opts.from,
       });
-      onDone();
+      onDone({ ...result, branch });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setCreating(false);
