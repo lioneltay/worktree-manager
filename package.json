@@ -2,6 +2,7 @@
   "name": "@lioneltay/worktree-manager",
   "version": "0.0.2",
   "description": "Git worktree manager for parallel agent workspaces",
+  "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
