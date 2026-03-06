@@ -16,6 +16,7 @@ type Props = {
   onDelete: (wt: WorktreeStatus) => void;
   onCreate: () => void;
   onPrune: () => void;
+  onFetch: () => void;
   onToggleStatus: (wt: WorktreeStatus) => void;
   onQuit: () => void;
 };
@@ -47,6 +48,7 @@ export function WorktreeList({
   onDelete,
   onCreate,
   onPrune,
+  onFetch,
   onToggleStatus,
   onQuit,
 }: Props) {
@@ -130,8 +132,12 @@ export function WorktreeList({
     }
 
     if (!isFiltering) {
-      if (input === "/" || input === "f") {
+      if (input === "/") {
         setIsFiltering(true);
+        return;
+      }
+      if (input === "f") {
+        onFetch();
         return;
       }
       if (input === "q") {
@@ -274,6 +280,7 @@ export function WorktreeList({
             { key: "d", label: "elete" },
             { key: "s", label: "tatus" },
             { key: "p", label: "rune" },
+            { key: "f", label: "etch" },
             { key: "/", label: "filter" },
             { key: "q", label: "uit" },
           ]}

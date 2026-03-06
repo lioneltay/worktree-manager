@@ -7,6 +7,7 @@ import { DeleteConfirm } from "./views/DeleteConfirm.js";
 import { OpenConfirm } from "./views/OpenConfirm.js";
 import { PruneConfirm } from "./views/PruneConfirm.js";
 import { list, getMainWorktree, status, remove } from "../core/worktree.js";
+import { createGit } from "../core/git.js";
 import { loadConfig } from "../core/config.js";
 import { findGitRoot } from "../utils/paths.js";
 import type { WorktreeStatus, WtConfig } from "../types.js";
@@ -31,6 +32,7 @@ export function App() {
     null,
   );
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [fetching, setFetching] = useState(false);
 
   const gitRoot = useMemo(() => findGitRoot(), []);
   const statusRequestRef = useRef(0);
@@ -72,6 +74,21 @@ export function App() {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchRemote = async () => {
+    if (!gitRoot || fetching) return;
+    setFetching(true);
+    setStatusMessage("Fetching...");
+    try {
+      const g = createGit(gitRoot);
+      await g.fetch();
+      setStatusMessage("Fetched latest from remote");
+    } catch {
+      setStatusMessage("Fetch failed");
+    } finally {
+      setFetching(false);
     }
   };
 
@@ -123,6 +140,7 @@ export function App() {
           onDelete={(wt) => setView({ type: "delete", worktree: wt })}
           onCreate={() => setView({ type: "create" })}
           onPrune={() => setView({ type: "prune" })}
+          onFetch={fetchRemote}
           onToggleStatus={toggleStatus}
           onQuit={() => exit()}
         />
