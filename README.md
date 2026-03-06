@@ -119,6 +119,10 @@ Remove stale worktrees in bulk. Automatically skips worktrees with uncommitted c
 
 Running `wt init` creates a `.wt.json` config file in your repository root with sensible defaults. You can also create this file manually. If no config exists, `wt create` still works but skips ignored file handling.
 
+### Local overrides
+
+Create a `.wt.local.json` file for personal settings like `open` that shouldn't be committed. Local values override `.wt.json`. Add `.wt.local.json` to your `.gitignore`.
+
 ```json
 {
   "ignoredFiles": {

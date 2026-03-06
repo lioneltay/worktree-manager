@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as path from "node:path";
 import type { WtConfig } from "../types.js";
 import { getConfigPath } from "../utils/paths.js";
 
@@ -10,22 +11,23 @@ function createDefaultConfigObject(): WtConfig {
   return { ignoredFiles: {} };
 }
 
+function loadJsonFile(filePath: string): Partial<WtConfig> {
+  if (!fs.existsSync(filePath)) return {};
+  try {
+    return JSON.parse(fs.readFileSync(filePath, "utf-8"));
+  } catch {
+    return {};
+  }
+}
+
 /**
- * Load the .wt.json config file
+ * Load config by merging .wt.json (project) with .wt.local.json (personal overrides)
  */
 export function loadConfig(gitRoot: string): WtConfig {
-  const configPath = getConfigPath(gitRoot);
+  const projectConfig = loadJsonFile(getConfigPath(gitRoot));
+  const localConfig = loadJsonFile(path.join(gitRoot, ".wt.local.json"));
 
-  if (!fs.existsSync(configPath)) {
-    return createDefaultConfigObject();
-  }
-
-  try {
-    const content = fs.readFileSync(configPath, "utf-8");
-    return { ...createDefaultConfigObject(), ...JSON.parse(content) };
-  } catch {
-    return createDefaultConfigObject();
-  }
+  return { ...createDefaultConfigObject(), ...projectConfig, ...localConfig };
 }
 
 /**

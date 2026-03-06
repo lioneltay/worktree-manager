@@ -9,6 +9,9 @@ export const initCommand = new Command("init")
       console.log("✓ Worktree management initialized");
       console.log(`  Created worktrees directory at ${worktreesDir}`);
       console.log("  Created .wt.json config file");
+      console.log(
+        "\n  Tip: Use .wt.local.json for personal settings (e.g. open) — add it to .gitignore",
+      );
     } catch (error) {
       console.error("Error:", (error as Error).message);
       process.exit(1);
