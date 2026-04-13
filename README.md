@@ -148,6 +148,8 @@ Each entry maps a file path to a mode:
 
 Use `"symlink"` for files that should stay in sync (e.g. `.env`), `"copy"` for files that might diverge (e.g. `.env.local`), and `"ignore"` for large directories you'll regenerate (e.g. `node_modules/`).
 
+Keys can include glob patterns. `*` matches any run of characters within a single path segment and `?` matches a single character, so `ai/skills/_*` or `packages/*/config.json` are both valid. Each match inherits the mode from its pattern.
+
 These rules can be overridden per-create with `--copy-all` (force copy mode for everything) or `--no-ignored` (skip all ignored file handling).
 
 ### `editor`
