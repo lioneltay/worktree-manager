@@ -15,9 +15,9 @@ export function handleIgnoredFiles(
     return;
   }
 
-  const ignoredFiles = config.ignoredFiles ?? {};
+  const entries = expandIgnoredFiles(gitRoot, config.ignoredFiles ?? {});
 
-  for (const [filePath, mode] of Object.entries(ignoredFiles)) {
+  for (const [filePath, mode] of entries) {
     const sourcePath = path.join(gitRoot, filePath);
     const targetPath = path.join(worktreePath, filePath);
 
@@ -45,6 +45,85 @@ export function handleIgnoredFiles(
       copyFileOrDir(sourcePath, targetPath);
     }
   }
+}
+
+/**
+ * Expand glob patterns in ignoredFiles keys into concrete paths.
+ * Supports `*` and `?` within a path segment (e.g. `ai/skills/_*`).
+ * Non-glob keys pass through unchanged.
+ */
+export function expandIgnoredFiles(
+  gitRoot: string,
+  ignoredFiles: Record<string, IgnoredFileMode>,
+): Array<[string, IgnoredFileMode]> {
+  const result: Array<[string, IgnoredFileMode]> = [];
+  for (const [pattern, mode] of Object.entries(ignoredFiles)) {
+    if (!isGlobPattern(pattern)) {
+      result.push([pattern, mode]);
+      continue;
+    }
+    for (const match of expandGlob(gitRoot, pattern)) {
+      result.push([match, mode]);
+    }
+  }
+  return result;
+}
+
+function isGlobPattern(pattern: string): boolean {
+  return /[*?]/.test(pattern);
+}
+
+function globSegmentToRegex(segment: string): RegExp {
+  let source = "^";
+  for (const char of segment) {
+    if (char === "*") {
+      source += "[^/]*";
+    } else if (char === "?") {
+      source += "[^/]";
+    } else {
+      source += char.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+    }
+  }
+  source += "$";
+  return new RegExp(source);
+}
+
+/**
+ * Expand a glob pattern relative to gitRoot into matching paths.
+ * Walks the filesystem segment-by-segment; returns paths relative to gitRoot.
+ */
+function expandGlob(gitRoot: string, pattern: string): string[] {
+  const segments = pattern.split("/").filter((s) => s.length > 0);
+  const results: string[] = [];
+
+  const walk = (currentRel: string, index: number): void => {
+    if (index === segments.length) {
+      if (currentRel) results.push(currentRel);
+      return;
+    }
+    const segment = segments[index];
+    if (segment === undefined) return;
+    if (!isGlobPattern(segment)) {
+      walk(currentRel ? `${currentRel}/${segment}` : segment, index + 1);
+      return;
+    }
+    const absDir = path.join(gitRoot, currentRel);
+    let entries: string[];
+    try {
+      entries = fs.readdirSync(absDir);
+    } catch {
+      return;
+    }
+    const regex = globSegmentToRegex(segment);
+    for (const entry of entries) {
+      if (regex.test(entry)) {
+        walk(currentRel ? `${currentRel}/${entry}` : entry, index + 1);
+      }
+    }
+  };
+
+  walk("", 0);
+  return results;
 }
 
 /**
