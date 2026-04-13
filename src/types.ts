@@ -37,6 +37,8 @@ export type WorktreeStatus = {
   createdAt: string;
   modified: number;
   untracked: number;
+  /** Whether git status/ahead-behind has been loaded (false = still enriching) */
+  statusLoaded: boolean;
 };
 
 /**

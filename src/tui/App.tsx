@@ -1,12 +1,17 @@
-import React, { useState, useEffect, useMemo, useRef } from "react";
-import { Box, Text, useApp } from "ink";
+import { useState, useEffect, useMemo, useRef } from "react";
+import { Text, useApp } from "ink";
 import { spawn, execSync } from "node:child_process";
 import { WorktreeList } from "./views/WorktreeList.js";
 import { CreateFlow } from "./views/CreateFlow.js";
 import { DeleteConfirm } from "./views/DeleteConfirm.js";
 import { OpenConfirm } from "./views/OpenConfirm.js";
 import { PruneConfirm } from "./views/PruneConfirm.js";
-import { list, getMainWorktree, status, remove } from "../core/worktree.js";
+import {
+  listAll,
+  enrichAllWorktrees,
+  status,
+  remove,
+} from "../core/worktree.js";
 import { createGit } from "../core/git.js";
 import { loadConfig } from "../core/config.js";
 import { findGitRoot } from "../utils/paths.js";
@@ -35,6 +40,7 @@ export function App() {
   const [fetching, setFetching] = useState(false);
 
   const gitRoot = useMemo(() => findGitRoot(), []);
+  const refreshGenRef = useRef(0);
   const statusRequestRef = useRef(0);
 
   const openWorktree = (wt: { path: string; branch: string }): boolean => {
@@ -63,30 +69,61 @@ export function App() {
     return true;
   };
 
-  const refreshWorktrees = async () => {
+  /**
+   * Load worktrees in two phases: show basic list instantly, then enrich with
+   * git status in the background. Optionally fetch from remote between phases
+   * so enrichment picks up fresh ahead/behind counts.
+   */
+  const refreshWorktrees = async ({ fetchFirst = false } = {}) => {
+    if (!gitRoot) return;
+    const gen = ++refreshGenRef.current;
+    const isStale = () => refreshGenRef.current !== gen;
+
     try {
-      setLoading(true);
       setError(null);
-      const [result, main] = await Promise.all([list(), getMainWorktree()]);
-      setWorktrees(result);
+
+      const { main, worktrees: wts } = await listAll(gitRoot);
+      if (isStale()) return;
+      setWorktrees(wts);
       setMainWorktree(main);
+      setLoading(false);
+
+      if (fetchFirst) {
+        try {
+          await createGit(gitRoot).fetch();
+        } catch {
+          // Non-fatal — enrichment still runs with stale remote data
+        }
+        if (isStale()) return;
+      }
+
+      const enriched = await enrichAllWorktrees(main ? [main, ...wts] : wts);
+      if (isStale()) return;
+
+      if (main) {
+        const [enrichedMain, ...enrichedWts] = enriched;
+        setMainWorktree(enrichedMain ?? null);
+        setWorktrees(enrichedWts);
+      } else {
+        setWorktrees(enriched);
+      }
     } catch (e) {
+      if (isStale()) return;
       setError(e instanceof Error ? e.message : String(e));
-    } finally {
       setLoading(false);
     }
   };
 
-  const fetchRemote = async () => {
+  const fetchRemote = async ({ silent = false } = {}) => {
     if (!gitRoot || fetching) return;
     setFetching(true);
-    setStatusMessage("Fetching...");
+    if (!silent) setStatusMessage("Fetching...");
     try {
-      const g = createGit(gitRoot);
-      await g.fetch();
-      setStatusMessage("Fetched latest from remote");
+      await createGit(gitRoot).fetch();
+      if (!silent) setStatusMessage("Fetched latest from remote");
+      await refreshWorktrees();
     } catch {
-      setStatusMessage("Fetch failed");
+      if (!silent) setStatusMessage("Fetch failed");
     } finally {
       setFetching(false);
     }
@@ -108,10 +145,14 @@ export function App() {
   };
 
   useEffect(() => {
-    refreshWorktrees();
-    if (gitRoot) {
-      setConfig(loadConfig(gitRoot));
-    }
+    if (!gitRoot) return;
+    setConfig(loadConfig(gitRoot));
+    refreshWorktrees({ fetchFirst: true });
+    // Bump the generation counter on unmount so any in-flight async work
+    // drops its results instead of updating state on an unmounted component.
+    return () => {
+      refreshGenRef.current++;
+    };
   }, []);
 
   if (!gitRoot) {
@@ -129,6 +170,7 @@ export function App() {
           worktrees={worktrees}
           mainWorktree={mainWorktree}
           loading={loading}
+          fetching={fetching}
           expandedWorktree={expandedWorktree}
           expandedStatus={expandedStatus}
           statusMessage={statusMessage}
@@ -140,7 +182,7 @@ export function App() {
           onDelete={(wt) => setView({ type: "delete", worktree: wt })}
           onCreate={() => setView({ type: "create" })}
           onPrune={() => setView({ type: "prune" })}
-          onFetch={fetchRemote}
+          onFetch={() => fetchRemote()}
           onToggleStatus={toggleStatus}
           onQuit={() => exit()}
         />

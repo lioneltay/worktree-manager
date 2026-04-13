@@ -3,5 +3,8 @@ import React from "react";
 import { App } from "./App.js";
 
 export function launchTui(): void {
-  render(<App />);
+  render(<App />, {
+    incrementalRendering: true,
+    alternateScreen: true,
+  });
 }

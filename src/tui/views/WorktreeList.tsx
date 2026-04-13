@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { Box, Text, useInput } from "ink";
 import Spinner from "ink-spinner";
 import Fuse from "fuse.js";
@@ -9,6 +9,7 @@ type Props = {
   worktrees: WorktreeStatus[];
   mainWorktree: WorktreeStatus | null;
   loading: boolean;
+  fetching: boolean;
   expandedWorktree: string | null;
   expandedStatus: WorktreeStatus | null;
   statusMessage: string | null;
@@ -41,6 +42,7 @@ export function WorktreeList({
   worktrees,
   mainWorktree,
   loading,
+  fetching,
   expandedWorktree,
   expandedStatus,
   statusMessage,
@@ -94,6 +96,67 @@ export function WorktreeList({
   const selected = displayList.length > 0 ? displayList[safeIndex] : undefined;
   const selectedIsMain = safeIndex < mainWorktreeCount;
 
+  // Track terminal size reactively so resizes re-render
+  const [termHeight, setTermHeight] = useState(
+    () => process.stdout.rows ?? 24,
+  );
+  useEffect(() => {
+    const onResize = () => setTermHeight(process.stdout.rows ?? 24);
+    process.stdout.on("resize", onResize);
+    return () => {
+      process.stdout.off("resize", onResize);
+    };
+  }, []);
+
+  // Keep header/footer pinned, scroll the worktree list
+  const chromeLines = 8 + (statusMessage ? 2 : 0);
+  const maxListLines = Math.max(3, termHeight - chromeLines);
+
+  // Scroll offset is sticky: keeps its value across renders so moving within
+  // the viewport doesn't cause the visible window to jump around.
+  const [scrollOffset, setScrollOffset] = useState(0);
+
+  // The visible range is derived from safeIndex, but may require scrollOffset
+  // to change first. We compute the desired offset here and sync via effect.
+  const viewportItems = Math.max(1, maxListLines - 2); // reserve ↑ + ↓
+  const desiredOffset = useMemo(() => {
+    if (displayList.length <= maxListLines) return 0;
+    let offset = Math.max(
+      0,
+      Math.min(scrollOffset, displayList.length - 1),
+    );
+    if (safeIndex < offset) offset = safeIndex;
+    if (safeIndex >= offset + viewportItems) {
+      offset = safeIndex - viewportItems + 1;
+    }
+    return offset;
+  }, [safeIndex, displayList.length, maxListLines, viewportItems, scrollOffset]);
+
+  useEffect(() => {
+    if (desiredOffset !== scrollOffset) setScrollOffset(desiredOffset);
+  }, [desiredOffset, scrollOffset]);
+
+  const scroll = useMemo(() => {
+    if (displayList.length === 0) {
+      return { start: 0, end: 0, up: false, down: false };
+    }
+    if (displayList.length <= maxListLines) {
+      return {
+        start: 0,
+        end: displayList.length,
+        up: false,
+        down: false,
+      };
+    }
+    const end = Math.min(desiredOffset + viewportItems, displayList.length);
+    return {
+      start: desiredOffset,
+      end,
+      up: desiredOffset > 0,
+      down: end < displayList.length,
+    };
+  }, [desiredOffset, displayList.length, maxListLines, viewportItems]);
+
   useInput((input, key) => {
     if (key.escape) {
       if (isFiltering) {
@@ -122,12 +185,14 @@ export function WorktreeList({
       }
     }
 
+    // Use safeIndex (clamped) as the base so navigation works even when
+    // selectedIndex has drifted out of range (e.g., after filter shrinks list).
     if (key.upArrow) {
-      setSelectedIndex((i) => Math.max(0, i - 1));
+      setSelectedIndex(Math.max(0, safeIndex - 1));
       return;
     }
     if (key.downArrow) {
-      setSelectedIndex((i) => Math.min(displayList.length - 1, i + 1));
+      setSelectedIndex(Math.min(displayList.length - 1, safeIndex + 1));
       return;
     }
 
@@ -169,7 +234,7 @@ export function WorktreeList({
 
   if (loading) {
     return (
-      <Box>
+      <Box height={termHeight}>
         <Spinner type="dots" />
         <Text> Loading worktrees...</Text>
       </Box>
@@ -177,12 +242,19 @@ export function WorktreeList({
   }
 
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" height={termHeight} overflow="hidden">
       <Box marginBottom={1}>
         <Text bold color="cyan">
           wt
         </Text>
         <Text dimColor> — worktree manager</Text>
+        {fetching && (
+          <>
+            <Text>  </Text>
+            <Spinner type="dots" />
+            <Text dimColor> fetching</Text>
+          </>
+        )}
       </Box>
 
       {/* Filter */}
@@ -208,12 +280,17 @@ export function WorktreeList({
               : "No matches."}
           </Text>
         )}
-        {displayList.map((wt, i) => {
+        {scroll.up && (
+          <Text dimColor>  ↑ {scroll.start} more above</Text>
+        )}
+        {displayList.slice(scroll.start, scroll.end).map((wt, sliceIdx) => {
+          const i = scroll.start + sliceIdx;
           const isSelected = i === safeIndex;
           const isExpanded = expandedWorktree === wt.path;
           const isMain = i < mainWorktreeCount;
-          const statusIcon =
-            wt.status === "modified" ? (
+          const statusIcon = !wt.statusLoaded ? (
+              <Text dimColor>○</Text>
+            ) : wt.status === "modified" ? (
               <Text color="yellow">●</Text>
             ) : (
               <Text color="green">✓</Text>
@@ -260,6 +337,9 @@ export function WorktreeList({
             </Box>
           );
         })}
+        {scroll.down && (
+          <Text dimColor>  ↓ {displayList.length - scroll.end} more below</Text>
+        )}
       </Box>
 
       <Box marginTop={1}>

@@ -34,33 +34,52 @@ export type RemoveOptions = {
 };
 
 /**
- * Build a WorktreeStatus object from git worktree info
- * Shared helper for list() and status() functions
+ * Build basic WorktreeStatus from porcelain output + metadata (no git status calls)
  */
-async function buildWorktreeStatus(
+function buildBasicWorktreeStatus(
   worktreePath: string,
   name: string,
   wtInfo: { branch: string | null },
   metadata: { createdAt?: string } | undefined,
-): Promise<WorktreeStatus> {
-  const branch = wtInfo.branch ?? "detached";
-  const worktreeGit = git.createGit(worktreePath);
-  const wtStatus = await git.getWorktreeStatus(worktreePath, worktreeGit);
-  const aheadBehind = wtInfo.branch
-    ? await git.getAheadBehind(worktreeGit, wtInfo.branch)
-    : { ahead: 0, behind: 0 };
-
+): WorktreeStatus {
   return {
     name,
     path: worktreePath,
-    branch,
+    branch: wtInfo.branch ?? "detached",
+    status: "clean",
+    ahead: 0,
+    behind: 0,
+    createdAt: metadata?.createdAt ?? "",
+    modified: 0,
+    untracked: 0,
+    statusLoaded: false,
+  };
+}
+
+/**
+ * Enrich a WorktreeStatus with live git status and ahead/behind counts.
+ * Runs git status and rev-list in parallel for speed.
+ */
+async function enrichWorktreeStatus(
+  wt: WorktreeStatus,
+): Promise<WorktreeStatus> {
+  const worktreeGit = git.createGit(wt.path);
+  const [wtStatus, aheadBehind] = await Promise.all([
+    git.getWorktreeStatus(wt.path, worktreeGit),
+    wt.branch !== "detached"
+      ? git.getAheadBehind(worktreeGit, wt.branch)
+      : Promise.resolve({ ahead: 0, behind: 0 }),
+  ]);
+
+  return {
+    ...wt,
     status:
       wtStatus.modified > 0 || wtStatus.untracked > 0 ? "modified" : "clean",
     ahead: aheadBehind.ahead,
     behind: aheadBehind.behind,
-    createdAt: metadata?.createdAt ?? "",
     modified: wtStatus.modified,
     untracked: wtStatus.untracked,
+    statusLoaded: true,
   };
 }
 
@@ -179,51 +198,77 @@ export async function create(
 }
 
 /**
- * List all worktrees
+ * List all worktrees and main worktree in one call (basic info only, no git status).
+ * Returns instantly — call enrichAllWorktrees() to fill in status details.
  */
-export async function list(): Promise<WorktreeStatus[]> {
-  const gitRoot = requireGitRoot();
+export async function listAll(gitRoot: string): Promise<{
+  main: WorktreeStatus | null;
+  worktrees: WorktreeStatus[];
+}> {
   const g = git.createGit(gitRoot);
   const gitWorktrees = await git.listGitWorktrees(g);
   const registry = loadRegistry(gitRoot);
 
-  const results: WorktreeStatus[] = [];
+  let main: WorktreeStatus | null = null;
+  const worktrees: WorktreeStatus[] = [];
 
   for (const wt of gitWorktrees) {
-    // Skip the main worktree
     if (wt.path === gitRoot) {
+      main = buildBasicWorktreeStatus(
+        gitRoot,
+        path.basename(gitRoot),
+        wt,
+        undefined,
+      );
       continue;
     }
 
-    // Skip worktrees where directory no longer exists (stale)
-    if (!fs.existsSync(wt.path)) {
-      continue;
-    }
+    if (!fs.existsSync(wt.path)) continue;
 
     const name = path.basename(wt.path);
-    const metadata = registry.worktrees[name];
-    const worktreeStatus = await buildWorktreeStatus(
-      wt.path,
-      name,
-      wt,
-      metadata,
+    worktrees.push(
+      buildBasicWorktreeStatus(wt.path, name, wt, registry.worktrees[name]),
     );
-    results.push(worktreeStatus);
   }
 
-  return results;
+  return { main, worktrees };
 }
 
 /**
- * Get the main worktree status (the original repo checkout)
+ * Enrich all worktrees with live git status in parallel.
+ * Returns the enriched array (same order). If enrichment fails for a worktree,
+ * it falls back to the basic (unenriched) status.
+ */
+export async function enrichAllWorktrees(
+  worktrees: WorktreeStatus[],
+): Promise<WorktreeStatus[]> {
+  const results = await Promise.allSettled(
+    worktrees.map(enrichWorktreeStatus),
+  );
+  return results.map((result, i) =>
+    result.status === "fulfilled"
+      ? result.value
+      : { ...worktrees[i]!, statusLoaded: true },
+  );
+}
+
+/**
+ * List all worktrees (fully enriched). Used by CLI commands.
+ */
+export async function list(): Promise<WorktreeStatus[]> {
+  const gitRoot = requireGitRoot();
+  const { worktrees } = await listAll(gitRoot);
+  return enrichAllWorktrees(worktrees);
+}
+
+/**
+ * Get the main worktree status (fully enriched). Used by CLI commands.
  */
 export async function getMainWorktree(): Promise<WorktreeStatus | null> {
   const gitRoot = requireGitRoot();
-  const g = git.createGit(gitRoot);
-  const gitWorktrees = await git.listGitWorktrees(g);
-  const main = gitWorktrees.find((wt) => wt.path === gitRoot);
+  const { main } = await listAll(gitRoot);
   if (!main) return null;
-  return buildWorktreeStatus(gitRoot, path.basename(gitRoot), main, undefined);
+  return enrichWorktreeStatus(main);
 }
 
 /**
@@ -255,7 +300,8 @@ export async function status(
     return null;
   }
 
-  return buildWorktreeStatus(worktreePath, name, wtInfo, metadata);
+  const basic = buildBasicWorktreeStatus(worktreePath, name, wtInfo, metadata);
+  return enrichWorktreeStatus(basic);
 }
 
 /**
